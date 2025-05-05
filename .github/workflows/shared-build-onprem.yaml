@@ -137,6 +137,7 @@ jobs:
           GIT_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.determine-tag-and-versions.outputs.release-tag }}
           ENV_TAG: ${{ inputs.environment }}
+          GITHUB_REPO_LOWERCASE: ${{ github.repository && github.repository || '' }}
         run: |
           cat <<EOF > /kaniko/.docker/config.json
           {
@@ -154,10 +155,14 @@ jobs:
           # Ensure config.json has correct permissions
           chmod 600 /kaniko/.docker/config.json
           
+          # Convert GitHub repository name to lowercase for Docker registry compatibility
+          GITHUB_REPO_LOWERCASE=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          
           echo "Building and pushing with tag: $RELEASE_TAG"
           echo "Environment: $ENV_TAG"
           echo "Using Node.js version: $NODE_VERSION"
           echo "Using pnpm version: $PNPM_VERSION"
+          echo "Using lowercase repository name: $GITHUB_REPO_LOWERCASE"
 
           # Build image with appropriate tags based on environment
           if [[ "$ENV_TAG" == "staging" ]]; then
@@ -167,9 +172,9 @@ jobs:
               --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG-$RELEASE_TAG" \
               --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG" \
               --destination="$HARBOR_REGISTRY/$IMAGE_NAME:${{ github.sha }}" \
-              --destination="ghcr.io/${{ github.repository }}:$ENV_TAG-$RELEASE_TAG" \
-              --destination="ghcr.io/${{ github.repository }}:$ENV_TAG" \
-              --destination="ghcr.io/${{ github.repository }}:${{ github.sha }}" \
+              --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:$ENV_TAG-$RELEASE_TAG" \
+              --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:$ENV_TAG" \
+              --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:${{ github.sha }}" \
               --image-name-with-digest-file=/kaniko/digests.txt \
               --build-arg NODE_ENV=${{ env.NODE_ENV }} \
               --build-arg NODE_VERSION=${{ env.NODE_VERSION }} \
@@ -188,9 +193,9 @@ jobs:
               --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$RELEASE_TAG" \
               --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG" \
               --destination="$HARBOR_REGISTRY/$IMAGE_NAME:${{ github.sha }}" \
-              --destination="ghcr.io/${{ github.repository }}:$RELEASE_TAG" \
-              --destination="ghcr.io/${{ github.repository }}:$ENV_TAG" \
-              --destination="ghcr.io/${{ github.repository }}:${{ github.sha }}" \
+              --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:$RELEASE_TAG" \
+              --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:$ENV_TAG" \
+              --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:${{ github.sha }}" \
               --image-name-with-digest-file=/kaniko/digests.txt \
               --build-arg NODE_ENV=${{ env.NODE_ENV }} \
               --build-arg NODE_VERSION=${{ env.NODE_VERSION }} \
