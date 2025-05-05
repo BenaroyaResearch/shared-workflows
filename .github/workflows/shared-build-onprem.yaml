@@ -43,6 +43,15 @@ on:
 jobs:
   determine-tag-and-versions:
     runs-on: ubuntu-latest
+    env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
+          IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
+          STG_HARBOR_USERNAME: ${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}
+          STG_HARBOR_PASSWORD: ${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}
+        #   PROD_HARBOR_USERNAME: ${{ secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}
+        #   PROD_HARBOR_PASSWORD: ${{ secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}
     outputs:
       release-tag: ${{ steps.get-tag.outputs.tag }}
       node-version: ${{ steps.extract-versions.outputs.node-version }}
@@ -66,12 +75,12 @@ jobs:
         id: set-env-vars
         run: |
           if [[ "${{ inputs.environment }}" == "staging" ]]; then
-            echo "harbor-username=${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}" >> $GITHUB_OUTPUT
-            echo "harbor-password=${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}" >> $GITHUB_OUTPUT
+            echo "harbor-username=$STG_HARBOR_USERNAME" >> $GITHUB_OUTPUT
+            echo "harbor-password=$STG_HARBOR_PASSWORD" >> $GITHUB_OUTPUT
             echo "Using staging Harbor credentials"
           else
-            echo "harbor-username=${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}" >> $GITHUB_OUTPUT
-            echo "harbor-password=${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}" >> $GITHUB_OUTPUT
+            echo "harbor-username=$STG_HARBOR_USERNAME" >> $GITHUB_OUTPUT
+            echo "harbor-password=$STG_HARBOR_PASSWORD" >> $GITHUB_OUTPUT
             echo "Using production Harbor credentials"
           fi
           
