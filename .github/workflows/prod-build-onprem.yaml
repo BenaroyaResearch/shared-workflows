@@ -1,0 +1,317 @@
+name: Production Build Onprem
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        required: true
+        type: string
+      package-json-path:
+        required: false
+        type: string
+        default: 'package.json'
+      k8s-namespace:
+        required: false
+        type: string
+        default: 'apps'
+      resource-type:
+        required: false
+        type: string
+        default: 'deployment'
+      release-tag:
+        required: false
+        type: string
+        description: 'Optional: Manually specify a release tag. If not provided, it will be determined automatically.'
+env:
+  NODE_ENV: 'production'
+  COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+  COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+  TZ: 'America/Los_Angeles'
+
+jobs:
+  determine-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      release-tag: ${{ steps.get-tag.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Get tag
+        id: get-tag
+        run: |
+          # First try to use the input tag if provided
+          if [[ -n "${{ inputs.release-tag }}" ]]; then
+            TAG="${{ inputs.release-tag }}"
+            echo "Using provided tag: $TAG"
+          # Next try to use the release event tag if this is triggered by a release
+          elif [[ -n "${{ github.event.release.tag_name }}" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+            echo "Using release event tag: $TAG"
+          # Otherwise get the latest tag from git
+          else
+            TAG=$(git describe --tags --abbrev=0)
+            echo "Using latest git tag: $TAG"
+          fi
+          
+          # Remove any 'v' prefix if present
+          TAG="${TAG#v}"
+          
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Using release tag: $TAG"
+
+  build-to-harbor:
+    needs: [determine-tag]
+    runs-on: arc-runners-arc-runner-set
+    container:
+      image: gcr.io/kaniko-project/executor:v1.22.0-debug
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+    env:
+      KANIKO_CACHE_ARGS: '--cache=true --cache-copy-layers=true --cache-ttl=24h --cache-repo=harbor.harbor.svc.cluster.local/bri-cache/docker'
+    steps:
+      - name: Extract versions
+        id: extract-versions
+        run: |
+          # Extract Node version from engines field
+          NODE_VERSION=$(cat ${{ inputs.package-json-path }} | grep -o '"node": *"[^"]*"' | cut -d'"' -f4)
+
+          # Extract pnpm version from packageManager field
+          PNPM_VERSION=$(cat ${{ inputs.package-json-path }} | grep -o '"packageManager": *"[^"]*"' | cut -d'@' -f2 | tr -d '"')
+
+          # Output for GitHub Actions
+          echo "NODE_VERSION=$NODE_VERSION" >> $GITHUB_ENV
+          echo "PNPM_VERSION=$PNPM_VERSION" >> $GITHUB_ENV
+
+          # Also print for debugging
+          echo "Extracted Node.js version: $NODE_VERSION"
+          echo "Extracted pnpm version: $PNPM_VERSION" 
+
+      - name: Build and Push Image to Harbor with kaniko
+        id: build
+        env:
+          HARBOR_USERNAME: ${{ secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}
+          HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
+          IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
+          GIT_USERNAME: ${{ github.actor }}
+          GIT_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.determine-tag.outputs.release-tag }}
+        run: |
+          cat <<EOF > /kaniko/.docker/config.json
+          {
+            "auths": {
+              "harbor.harbor.svc.cluster.local": {
+                "auth": "$(echo -n "$HARBOR_USERNAME:$HARBOR_PASSWORD" | base64 -w0)"
+              },
+              "ghcr.io": {
+                "auth": "$(echo -n "$GIT_USERNAME:$GIT_PASSWORD" | base64 -w0)"
+              }
+            }
+          }
+          EOF
+
+          echo "Building and pushing with release tag: $RELEASE_TAG"
+
+          /kaniko/executor --dockerfile="./Dockerfile" \
+            --context="${{ github.repositoryUrl }}#${{ github.ref }}#${{ github.sha }}"  \
+            --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$RELEASE_TAG" \
+            --destination="$HARBOR_REGISTRY/$IMAGE_NAME:production" \
+            --destination="$HARBOR_REGISTRY/$IMAGE_NAME:${{ github.sha }}" \
+            --image-name-with-digest-file=/kaniko/digests.txt \
+            --build-arg NODE_ENV=${{ env.NODE_ENV }} \
+            --build-arg NODE_VERSION=${{ env.NODE_VERSION }} \
+            --build-arg PNPM_VERSION=${{ env.PNPM_VERSION }} \
+            --label "org.opencontainers.image.authors=${{ github.actor }}" \
+            ${{ env.KANIKO_CACHE_ARGS }} \
+            --insecure \
+            --insecure-pull \
+            --skip-tls-verify \
+            --skip-tls-verify-pull \
+            --push-retry 5
+
+      - name: Extract digest
+        id: digest
+        run: |
+          DIGEST=$(cat /kaniko/digests.txt | grep "harbor.harbor.svc.cluster.local" | head -n1 | cut -d'@' -f2)
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "digest=$DIGEST"
+
+  sign-images:
+    needs: [determine-tag, build-to-harbor]
+    runs-on: arc-runners-arc-runner-set
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.8.2
+
+      - name: Sign Harbor images
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
+          IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
+          HARBOR_USERNAME: ${{ secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}
+          HARBOR_DIGEST: ${{ needs.build-to-harbor.outputs.digest }}
+        run: |
+          echo "${COSIGN_PRIVATE_KEY}" > /tmp/cosign.key
+
+          # Setup Docker config
+          mkdir -p ~/.docker
+          cat <<EOF > ~/.docker/config.json
+          {
+            "auths": {
+              "harbor.harbor.svc.cluster.local": {
+                "auth": "$(echo -n "$HARBOR_USERNAME:$HARBOR_PASSWORD" | base64 -w0)"
+              }
+            }
+          }
+          EOF
+
+          if [ -n "$HARBOR_DIGEST" ]; then
+            cosign sign --key /tmp/cosign.key --yes --allow-insecure-registry=true "$HARBOR_REGISTRY/$IMAGE_NAME@$HARBOR_DIGEST"
+          fi
+
+  check-k8s-deployment:
+    needs: [determine-tag, sign-images, build-to-harbor]
+    runs-on: arc-runners-arc-runner-set
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+      
+      - name: Check deployment status
+        env:
+          KUBE_NAMESPACE: ${{ inputs.k8s-namespace }}
+          RESOURCE_TYPE: ${{ inputs.resource-type }}
+          APP_NAME: ${{ inputs.app-name }}
+          RELEASE_TAG: ${{ needs.determine-tag.outputs.release-tag }}
+          IMAGE_TAG: ${{ github.sha }}
+          HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
+          IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
+          HARBOR_DIGEST: ${{ needs.build-to-harbor.outputs.digest }}
+          MAX_RETRIES: 30
+          RETRY_INTERVAL: 10
+        run: |
+          # Check if service account token exists
+          if [ -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
+            echo "Using in-cluster service account token"
+          else
+            echo "No service account token found - ensure your runner has the correct permissions"
+            exit 1
+          fi
+          
+          # Convert resource type to lowercase for consistency
+          RESOURCE_TYPE=$(echo "$RESOURCE_TYPE" | tr '[:upper:]' '[:lower:]')
+          echo "Checking for resource type: $RESOURCE_TYPE in namespace: $KUBE_NAMESPACE"
+          
+          # Wait for deployment to use new image
+          echo "Checking if $RESOURCE_TYPE is using the new image with digest $HARBOR_DIGEST or tag $RELEASE_TAG"
+          
+          retry_count=0
+          deployed=false
+          
+          while [ $retry_count -lt $MAX_RETRIES ] && [ "$deployed" = false ]; do
+            # Check if the resource exists and is using our image
+            if kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME 2>/dev/null; then
+              # Get current image being used
+              CURRENT_IMAGE=$(kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME -o jsonpath='{.spec.template.spec.containers[0].image}')
+              
+              echo "Current image: $CURRENT_IMAGE"
+              echo "Expected image by tag: $HARBOR_REGISTRY/$IMAGE_NAME:$RELEASE_TAG"
+              echo "Expected image by hash: $HARBOR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG or with digest $HARBOR_DIGEST"
+              
+              # Check if deployment is using our image (either by release tag, commit hash, or digest)
+              if [[ "$CURRENT_IMAGE" == *"$RELEASE_TAG"* ]] || [[ "$CURRENT_IMAGE" == *"$IMAGE_TAG"* ]] || [[ -n "$HARBOR_DIGEST" && "$CURRENT_IMAGE" == *"$HARBOR_DIGEST"* ]]; then
+                echo "$RESOURCE_TYPE is using the new image!"
+                
+                # Check if deployment is ready
+                READY_REPLICAS=$(kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME -o jsonpath='{.status.readyReplicas}')
+                REPLICAS=$(kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME -o jsonpath='{.status.replicas}')
+                
+                if [ "$READY_REPLICAS" == "$REPLICAS" ] && [ "$READY_REPLICAS" -gt 0 ]; then
+                  echo "All pods are reported ready at resource level: $READY_REPLICAS/$REPLICAS"
+                  
+                  # Additional check to verify actual pod readiness
+                  PODS=$(kubectl get pods -n $KUBE_NAMESPACE -l app=$APP_NAME -o name)
+                  all_pods_ready=true
+                  all_pods_have_new_image=true
+                  
+                  for POD in $PODS; do
+                    POD_NAME=$(echo $POD | cut -d'/' -f2)
+                    POD_STATUS=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.status.phase}')
+                    CONTAINER_READY=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.status.containerStatuses[0].ready}')
+                    
+                    # Check the actual running image in each pod
+                    POD_IMAGE=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.spec.containers[0].image}')
+                    echo "Pod $POD_NAME is running image: $POD_IMAGE"
+                    
+                    # Verify the pod is using the new image (by release tag, commit hash, or digest)
+                    if [[ "$POD_IMAGE" != *"$RELEASE_TAG"* ]] && [[ "$POD_IMAGE" != *"$IMAGE_TAG"* ]] && [[ -n "$HARBOR_DIGEST" && "$POD_IMAGE" != *"$HARBOR_DIGEST"* ]]; then
+                      echo "Pod $POD_NAME is not running the expected image!"
+                      all_pods_have_new_image=false
+                    fi
+                    
+                    if [[ "$POD_STATUS" != "Running" ]] || [[ "$CONTAINER_READY" != "true" ]]; then
+                      echo "Pod $POD_NAME is not ready. Status: $POD_STATUS, Container Ready: $CONTAINER_READY"
+                      all_pods_ready=false
+                      
+                      # Show pod conditions
+                      echo "--- Pod Conditions ---"
+                      kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\n"}{end}'
+                      
+                      # Get container status
+                      CONTAINER_STATUS=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.status.containerStatuses[0].state}')
+                      echo "Container state: $CONTAINER_STATUS"
+                      
+                      # Get logs if possible
+                      echo "--- Container logs ---"
+                      kubectl logs $POD -n $KUBE_NAMESPACE --tail=50 || echo "Cannot fetch logs"
+                    else
+                      echo "Pod $POD_NAME is running and truly ready."
+                    fi
+                  done
+                  
+                  if [ "$all_pods_ready" = true ] && [ "$all_pods_have_new_image" = true ]; then
+                    deployed=true
+                    echo "All pods are verified to be actually ready, running, and using the new image."
+                  else
+                    if [ "$all_pods_have_new_image" = false ]; then
+                      echo "Not all pods are running the expected image version. Waiting for rolling update to complete."
+                    else
+                      echo "Resource reports ready but actual pod check failed. Waiting for pods to be truly ready."
+                    fi
+                  fi
+                fi
+              fi
+            else
+              echo "$RESOURCE_TYPE $APP_NAME not found in namespace $KUBE_NAMESPACE"
+            fi
+            
+            if [ "$deployed" = false ]; then
+              retry_count=$((retry_count+1))
+              echo "Attempt $retry_count/$MAX_RETRIES. Waiting $RETRY_INTERVAL seconds before retrying..."
+              sleep $RETRY_INTERVAL
+            fi
+          done
+          
+          if [ "$deployed" = true ]; then
+            echo "$RESOURCE_TYPE verified successfully!"
+            exit 0
+          else
+            echo "Failed to verify $RESOURCE_TYPE after $MAX_RETRIES attempts"
+            exit 1
+          fi 
