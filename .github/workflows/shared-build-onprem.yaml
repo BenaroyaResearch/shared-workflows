@@ -1,4 +1,4 @@
-name: Staging Build Onprem
+name: Shared Build Onprem
 
 on:
   workflow_call:
@@ -18,72 +18,75 @@ on:
         required: false
         type: string
         default: 'deployment'
-env:
-  NODE_ENV: 'staging'
-  COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-  COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
-  TZ: 'America/Los_Angeles'
+      release-tag:
+        required: false
+        type: string
+        description: 'Optional: Manually specify a release tag. If not provided, it will be determined automatically.'
+      environment:
+        required: true
+        type: string
+        description: 'Environment to build for (e.g., staging or production)'
+      harbor-username-secret:
+        required: true
+        type: string
+        description: 'Name of the secret containing Harbor username (e.g., STG_HARBOR_REGISTRY_RW_USERNAME)'
+      harbor-password-secret:
+        required: true
+        type: string
+        description: 'Name of the secret containing Harbor password (e.g., STG_HARBOR_REGISTRY_RW_PASSWORD)'
+    secrets:
+      COSIGN_PRIVATE_KEY:
+        required: true
+      COSIGN_PASSWORD:
+        required: true
 
 jobs:
-  # build-to-ghcr:
-  #   runs-on: arc-runners-arc-runner-set
-  #   container:
-  #     image: gcr.io/kaniko-project/executor:v1.22.0-debug
-  #   permissions:
-  #     contents: read
-  #     packages: write
-  #     id-token: write
-  #   outputs:
-  #     digest: ${{ steps.digest.outputs.digest }}
-  #   env:
-  #     KANIKO_CACHE_ARGS: '--cache=true --cache-copy-layers=true --cache-ttl=24h --cache-dir=/cache --cache-repo=ghcr.io/$(echo ${{ github.repository }} | tr "[:upper:]" "[:lower:]")/cache'
-  #   steps:
-  #     - name: Build and Push Image to GHCR with kaniko
-  #       id: build
-  #       env:
-  #         GIT_USERNAME: ${{ github.actor }}
-  #         GIT_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-  #         GH_REGISTRY: 'ghcr.io'
-  #         IMAGE_NAME: '${{ github.repository }}'
-  #       run: |
-  #         cat <<EOF > /kaniko/.docker/config.json
-  #         {
-  #           "auths": {
-  #             "ghcr.io": {
-  #               "auth": "$(echo -n "$GIT_USERNAME:$GIT_PASSWORD" | base64 -w0)"
-  #             }
-  #           }
-  #         }
-  #         EOF
-
-  #         /kaniko/executor --dockerfile="./Dockerfile" \
-  #           --context="${{ github.repositoryUrl }}#${{ github.ref }}#${{ github.sha }}"  \
-  #           --destination="$GH_REGISTRY/$(echo $IMAGE_NAME | tr '[:upper:]' '[:lower:]'):staging-${{ github.sha }}-$(date +%Y%m%d%H%M%S)" \
-  #           --destination="$GH_REGISTRY/$(echo $IMAGE_NAME | tr '[:upper:]' '[:lower:]'):staging" \
-  #           --destination="$GH_REGISTRY/$(echo $IMAGE_NAME | tr '[:upper:]' '[:lower:]'):${{ github.sha }}" \
-  #           --image-name-with-digest-file=/kaniko/digests.txt \
-  #           --build-arg NODE_ENV=${{ env.NODE_ENV }} \
-  #           ${{ env.KANIKO_CACHE_ARGS }} \
-  #           --push-retry 5
-
-  #     - name: Extract digest
-  #       id: digest
-  #       run: |
-  #         DIGEST=$(cat /kaniko/digests.txt | grep "ghcr.io" | head -n1 | cut -d'@' -f2)
-  #         echo "digest=$DIGEST" >> $GITHUB_OUTPUT
-
-  build-to-harbor:
-    runs-on: arc-runners-arc-runner-set
-    container:
-      image: gcr.io/kaniko-project/executor:v1.22.0-debug
-    permissions:
-      contents: read
-      id-token: write
+  determine-tag-and-versions:
+    runs-on: ubuntu-latest
     outputs:
-      digest: ${{ steps.digest.outputs.digest }}
-    env:
-      KANIKO_CACHE_ARGS: '--cache=true --cache-copy-layers=true --cache-ttl=24h --cache-repo=harbor.harbor.svc.cluster.local/bri-cache/docker'
+      release-tag: ${{ steps.get-tag.outputs.tag }}
+      node-version: ${{ steps.extract-versions.outputs.node-version }}
+      pnpm-version: ${{ steps.extract-versions.outputs.pnpm-version }}
+      timestamp: ${{ steps.timestamp.outputs.value }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Get timestamp
+        id: timestamp
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          echo "value=$TIMESTAMP" >> $GITHUB_OUTPUT
+          
+      - name: Get tag
+        id: get-tag
+        run: |
+          # First try to use the input tag if provided
+          if [[ -n "${{ inputs.release-tag }}" ]]; then
+            TAG="${{ inputs.release-tag }}"
+            echo "Using provided tag: $TAG"
+          # Next try to use the release event tag if this is triggered by a release
+          elif [[ -n "${{ github.event.release.tag_name }}" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+            echo "Using release event tag: $TAG"
+          # For staging, use the commit SHA with timestamp
+          elif [[ "${{ inputs.environment }}" == "staging" ]]; then
+            TAG="${{ github.sha }}-$(date +%Y%m%d%H%M%S)"
+            echo "Using staging tag with commit SHA and timestamp: $TAG"
+          # Otherwise get the latest tag from git
+          else
+            TAG=$(git describe --tags --abbrev=0)
+            echo "Using latest git tag: $TAG"
+          fi
+          
+          # Remove any 'v' prefix if present
+          TAG="${TAG#v}"
+          
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Using release tag: $TAG"
+          
       - name: Extract versions
         id: extract-versions
         run: |
@@ -94,22 +97,40 @@ jobs:
           PNPM_VERSION=$(cat ${{ inputs.package-json-path }} | grep -o '"packageManager": *"[^"]*"' | cut -d'@' -f2 | tr -d '"')
 
           # Output for GitHub Actions
-          echo "NODE_VERSION=$NODE_VERSION" >> $GITHUB_ENV
-          echo "PNPM_VERSION=$PNPM_VERSION" >> $GITHUB_ENV
+          echo "node-version=$NODE_VERSION" >> $GITHUB_OUTPUT
+          echo "pnpm-version=$PNPM_VERSION" >> $GITHUB_OUTPUT
 
           # Also print for debugging
           echo "Extracted Node.js version: $NODE_VERSION"
           echo "Extracted pnpm version: $PNPM_VERSION" 
 
+  build-to-harbor:
+    needs: [determine-tag-and-versions]
+    runs-on: arc-runners-arc-runner-set
+    container:
+      image: gcr.io/kaniko-project/executor:v1.22.0-debug
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+    env:
+      KANIKO_CACHE_ARGS: '--cache=true --cache-copy-layers=true --cache-ttl=24h --cache-repo=harbor.harbor.svc.cluster.local/bri-cache/docker'
+      NODE_VERSION: ${{ needs.determine-tag-and-versions.outputs.node-version }}
+      PNPM_VERSION: ${{ needs.determine-tag-and-versions.outputs.pnpm-version }}
+      NODE_ENV: ${{ inputs.environment }}
+    steps:
       - name: Build and Push Image to Harbor with kaniko
         id: build
         env:
-          HARBOR_USERNAME: ${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}
-          HARBOR_PASSWORD: ${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}
+          HARBOR_USERNAME: ${{ secrets[inputs.harbor-username-secret] }}
+          HARBOR_PASSWORD: ${{ secrets[inputs.harbor-password-secret] }}
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
           IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
           GIT_USERNAME: ${{ github.actor }}
           GIT_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.determine-tag-and-versions.outputs.release-tag }}
+          ENV_TAG: ${{ inputs.environment }}
         run: |
           cat <<EOF > /kaniko/.docker/config.json
           {
@@ -124,22 +145,49 @@ jobs:
           }
           EOF
 
-          /kaniko/executor --dockerfile="./Dockerfile" \
-            --context="${{ github.repositoryUrl }}#${{ github.ref }}#${{ github.sha }}"  \
-            --destination="$HARBOR_REGISTRY/$IMAGE_NAME:staging-${{ github.sha }}-$(date +%Y%m%d%H%M%S)" \
-            --destination="$HARBOR_REGISTRY/$IMAGE_NAME:staging" \
-            --destination="$HARBOR_REGISTRY/$IMAGE_NAME:${{ github.sha }}" \
-            --image-name-with-digest-file=/kaniko/digests.txt \
-            --build-arg NODE_ENV=${{ env.NODE_ENV }} \
-            --build-arg NODE_VERSION=${{ env.NODE_VERSION }} \
-            --build-arg PNPM_VERSION=${{ env.PNPM_VERSION }} \
-            --label "org.opencontainers.image.authors=${{ github.actor }}" \
-            ${{ env.KANIKO_CACHE_ARGS }} \
-            --insecure \
-            --insecure-pull \
-            --skip-tls-verify \
-            --skip-tls-verify-pull \
-            --push-retry 5
+          echo "Building and pushing with tag: $RELEASE_TAG"
+          echo "Environment: $ENV_TAG"
+          echo "Using Node.js version: $NODE_VERSION"
+          echo "Using pnpm version: $PNPM_VERSION"
+
+          # Build image with appropriate tags based on environment
+          if [[ "$ENV_TAG" == "staging" ]]; then
+            # For staging, add timestamp-based tag, staging tag, and commit SHA tag
+            /kaniko/executor --dockerfile="./Dockerfile" \
+              --context="${{ github.repositoryUrl }}#${{ github.ref }}#${{ github.sha }}"  \
+              --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG-$RELEASE_TAG" \
+              --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG" \
+              --destination="$HARBOR_REGISTRY/$IMAGE_NAME:${{ github.sha }}" \
+              --image-name-with-digest-file=/kaniko/digests.txt \
+              --build-arg NODE_ENV=${{ env.NODE_ENV }} \
+              --build-arg NODE_VERSION=${{ env.NODE_VERSION }} \
+              --build-arg PNPM_VERSION=${{ env.PNPM_VERSION }} \
+              --label "org.opencontainers.image.authors=${{ github.actor }}" \
+              ${{ env.KANIKO_CACHE_ARGS }} \
+              --insecure \
+              --insecure-pull \
+              --skip-tls-verify \
+              --skip-tls-verify-pull \
+              --push-retry 5
+          else
+            # For production, add version tag, production tag, and commit SHA tag
+            /kaniko/executor --dockerfile="./Dockerfile" \
+              --context="${{ github.repositoryUrl }}#${{ github.ref }}#${{ github.sha }}"  \
+              --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$RELEASE_TAG" \
+              --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG" \
+              --destination="$HARBOR_REGISTRY/$IMAGE_NAME:${{ github.sha }}" \
+              --image-name-with-digest-file=/kaniko/digests.txt \
+              --build-arg NODE_ENV=${{ env.NODE_ENV }} \
+              --build-arg NODE_VERSION=${{ env.NODE_VERSION }} \
+              --build-arg PNPM_VERSION=${{ env.PNPM_VERSION }} \
+              --label "org.opencontainers.image.authors=${{ github.actor }}" \
+              ${{ env.KANIKO_CACHE_ARGS }} \
+              --insecure \
+              --insecure-pull \
+              --skip-tls-verify \
+              --skip-tls-verify-pull \
+              --push-retry 5
+          fi
 
       - name: Extract digest
         id: digest
@@ -149,7 +197,7 @@ jobs:
           echo "digest=$DIGEST"
 
   sign-images:
-    needs: [build-to-harbor]
+    needs: [determine-tag-and-versions, build-to-harbor]
     runs-on: arc-runners-arc-runner-set
     permissions:
       contents: read
@@ -165,8 +213,8 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
           IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
-          HARBOR_USERNAME: ${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}
-          HARBOR_PASSWORD: ${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}
+          HARBOR_USERNAME: ${{ secrets[inputs.harbor-username-secret] }}
+          HARBOR_PASSWORD: ${{ secrets[inputs.harbor-password-secret] }}
           HARBOR_DIGEST: ${{ needs.build-to-harbor.outputs.digest }}
         run: |
           echo "${COSIGN_PRIVATE_KEY}" > /tmp/cosign.key
@@ -188,13 +236,12 @@ jobs:
           fi
 
   check-k8s-deployment:
-    needs: [sign-images]
+    needs: [determine-tag-and-versions, sign-images, build-to-harbor]
     runs-on: arc-runners-arc-runner-set
     permissions:
       contents: read
       id-token: write
     steps:
-      #bitnami/kubectl:latest
       - name: Install kubectl
         uses: azure/setup-kubectl@v3
         with:
@@ -205,6 +252,8 @@ jobs:
           KUBE_NAMESPACE: ${{ inputs.k8s-namespace }}
           RESOURCE_TYPE: ${{ inputs.resource-type }}
           APP_NAME: ${{ inputs.app-name }}
+          RELEASE_TAG: ${{ needs.determine-tag-and-versions.outputs.release-tag }}
+          ENV_TAG: ${{ inputs.environment }}
           IMAGE_TAG: ${{ github.sha }}
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
           IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
@@ -225,7 +274,7 @@ jobs:
           echo "Checking for resource type: $RESOURCE_TYPE in namespace: $KUBE_NAMESPACE"
           
           # Wait for deployment to use new image
-          echo "Checking if $RESOURCE_TYPE is using the new image with digest $HARBOR_DIGEST"
+          echo "Checking if $RESOURCE_TYPE is using the new image with digest $HARBOR_DIGEST or tag $RELEASE_TAG"
           
           retry_count=0
           deployed=false
@@ -237,10 +286,17 @@ jobs:
               CURRENT_IMAGE=$(kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME -o jsonpath='{.spec.template.spec.containers[0].image}')
               
               echo "Current image: $CURRENT_IMAGE"
-              echo "Expected image: $HARBOR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG or with digest $HARBOR_DIGEST"
+              if [[ "$ENV_TAG" == "staging" ]]; then
+                echo "Expected image by tag: $HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG-$RELEASE_TAG"
+                echo "Expected image by env: $HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG"
+              else
+                echo "Expected image by tag: $HARBOR_REGISTRY/$IMAGE_NAME:$RELEASE_TAG"
+                echo "Expected image by env: $HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG"
+              fi
+              echo "Expected image by hash: $HARBOR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG or with digest $HARBOR_DIGEST"
               
-              # Check if deployment is using our image (either by tag or digest)
-              if [[ "$CURRENT_IMAGE" == *"$IMAGE_TAG"* ]] || [[ -n "$HARBOR_DIGEST" && "$CURRENT_IMAGE" == *"$HARBOR_DIGEST"* ]]; then
+              # Check if deployment is using our image (either by environment, release tag, commit hash, or digest)
+              if [[ "$CURRENT_IMAGE" == *"$ENV_TAG"* ]] || [[ "$CURRENT_IMAGE" == *"$RELEASE_TAG"* ]] || [[ "$CURRENT_IMAGE" == *"$IMAGE_TAG"* ]] || [[ -n "$HARBOR_DIGEST" && "$CURRENT_IMAGE" == *"$HARBOR_DIGEST"* ]]; then
                 echo "$RESOURCE_TYPE is using the new image!"
                 
                 # Check if deployment is ready
@@ -265,7 +321,7 @@ jobs:
                     echo "Pod $POD_NAME is running image: $POD_IMAGE"
                     
                     # Verify the pod is using the new image
-                    if [[ "$POD_IMAGE" != *"$IMAGE_TAG"* ]] && [[ -n "$HARBOR_DIGEST" && "$POD_IMAGE" != *"$HARBOR_DIGEST"* ]]; then
+                    if [[ "$POD_IMAGE" != *"$ENV_TAG"* ]] && [[ "$POD_IMAGE" != *"$RELEASE_TAG"* ]] && [[ "$POD_IMAGE" != *"$IMAGE_TAG"* ]] && [[ -n "$HARBOR_DIGEST" && "$POD_IMAGE" != *"$HARBOR_DIGEST"* ]]; then
                       echo "Pod $POD_NAME is not running the expected image!"
                       all_pods_have_new_image=false
                     fi
@@ -319,4 +375,4 @@ jobs:
           else
             echo "Failed to verify $RESOURCE_TYPE after $MAX_RETRIES attempts"
             exit 1
-          fi
+          fi 
