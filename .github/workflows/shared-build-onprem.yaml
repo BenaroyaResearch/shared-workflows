@@ -116,6 +116,7 @@ jobs:
       image: gcr.io/kaniko-project/executor:v1.22.0-debug
     permissions:
       contents: read
+      packages: write
       id-token: write
     outputs:
       digest: ${{ steps.digest.outputs.digest }}
@@ -166,6 +167,9 @@ jobs:
               --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG-$RELEASE_TAG" \
               --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG" \
               --destination="$HARBOR_REGISTRY/$IMAGE_NAME:${{ github.sha }}" \
+              --destination="ghcr.io/${{ github.repository }}:$ENV_TAG-$RELEASE_TAG" \
+              --destination="ghcr.io/${{ github.repository }}:$ENV_TAG" \
+              --destination="ghcr.io/${{ github.repository }}:${{ github.sha }}" \
               --image-name-with-digest-file=/kaniko/digests.txt \
               --build-arg NODE_ENV=${{ env.NODE_ENV }} \
               --build-arg NODE_VERSION=${{ env.NODE_VERSION }} \
@@ -184,6 +188,9 @@ jobs:
               --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$RELEASE_TAG" \
               --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG" \
               --destination="$HARBOR_REGISTRY/$IMAGE_NAME:${{ github.sha }}" \
+              --destination="ghcr.io/${{ github.repository }}:$RELEASE_TAG" \
+              --destination="ghcr.io/${{ github.repository }}:$ENV_TAG" \
+              --destination="ghcr.io/${{ github.repository }}:${{ github.sha }}" \
               --image-name-with-digest-file=/kaniko/digests.txt \
               --build-arg NODE_ENV=${{ env.NODE_ENV }} \
               --build-arg NODE_VERSION=${{ env.NODE_VERSION }} \
