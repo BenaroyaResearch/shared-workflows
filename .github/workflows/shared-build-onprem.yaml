@@ -123,8 +123,8 @@ jobs:
       - name: Build and Push Image to Harbor with kaniko
         id: build
         env:
-          HARBOR_USERNAME: ${{ secrets[inputs.harbor-username-secret] }}
-          HARBOR_PASSWORD: ${{ secrets[inputs.harbor-password-secret] }}
+          HARBOR_USERNAME: ${{ secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
           IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
           GIT_USERNAME: ${{ github.actor }}
