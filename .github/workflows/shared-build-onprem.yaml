@@ -124,20 +124,9 @@ jobs:
       NODE_VERSION: ${{ needs.determine-tag-and-versions.outputs.node-version }}
       PNPM_VERSION: ${{ needs.determine-tag-and-versions.outputs.pnpm-version }}
       NODE_ENV: ${{ inputs.environment }}
+      HARBOR_USERNAME: ${{ inputs.environment == 'staging' && secrets.STG_HARBOR_REGISTRY_RW_USERNAME || secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}
+      HARBOR_PASSWORD: ${{ inputs.environment == 'staging' && secrets.STG_HARBOR_REGISTRY_RW_PASSWORD || secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}
     steps:
-      - name: Set environment-specific variables
-        id: set-env-vars
-        run: |
-          if [[ "${{ inputs.environment }}" == "staging" ]]; then
-            echo "Using staging Harbor credentials"
-            echo "HARBOR_USERNAME=${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}" >> $GITHUB_ENV
-            echo "HARBOR_PASSWORD=${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}" >> $GITHUB_ENV
-          else
-            echo "Using production Harbor credentials"
-            echo "HARBOR_USERNAME=${{ secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}" >> $GITHUB_ENV
-            echo "HARBOR_PASSWORD=${{ secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}" >> $GITHUB_ENV
-          fi
-
       - name: Build and Push Image to Harbor with kaniko
         id: build
         env:
@@ -148,44 +137,25 @@ jobs:
           RELEASE_TAG: ${{ needs.determine-tag-and-versions.outputs.release-tag }}
           ENV_TAG: ${{ inputs.environment }}
         run: |
-          # Debug auth credentials
+          # Debug auth credentials without exposing them
           echo "Using HARBOR_USERNAME length: ${#HARBOR_USERNAME}"
           echo "Using HARBOR_PASSWORD length: ${#HARBOR_PASSWORD}"
           
-          # Create auth credentials file for kaniko
-          mkdir -p /kaniko/.docker
-          
-          # Use direct variable substitution for better reliability
-          if [[ "${{ inputs.environment }}" == "staging" ]]; then
-            HARBOR_USERNAME="${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}"
-            HARBOR_PASSWORD="${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}"
-          else
-            HARBOR_USERNAME="${{ secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}"
-            HARBOR_PASSWORD="${{ secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}"
-          fi
-          
-          # Encode credentials directly
-          HARBOR_AUTH=$(echo -n "${HARBOR_USERNAME}:${HARBOR_PASSWORD}" | base64 -w0)
-          GIT_AUTH=$(echo -n "$GIT_USERNAME:$GIT_PASSWORD" | base64 -w0)
-          
-          # Create config.json with proper JSON structure
-          echo '{
+          cat <<EOF > /kaniko/.docker/config.json
+          {
             "auths": {
               "harbor.harbor.svc.cluster.local": {
-                "auth": "'${HARBOR_AUTH}'"
+                "auth": "$(echo -n "$HARBOR_USERNAME:$HARBOR_PASSWORD" | base64 -w0)"
               },
               "ghcr.io": {
-                "auth": "'${GIT_AUTH}'"
+                "auth": "$(echo -n "$GIT_USERNAME:$GIT_PASSWORD" | base64 -w0)"
               }
-            },
-            "credHelpers": {}
-          }' > /kaniko/.docker/config.json
+            }
+          }
+          EOF
           
           # Ensure config.json has correct permissions
           chmod 600 /kaniko/.docker/config.json
-          
-          echo "Docker config.json created and verified"
-          grep -q "auth" /kaniko/.docker/config.json && echo "Auth entries found in config" || echo "ERROR: No auth entries in config"
           
           echo "Building and pushing with tag: $RELEASE_TAG"
           echo "Environment: $ENV_TAG"
@@ -247,22 +217,12 @@ jobs:
       contents: read
       id-token: write
       packages: write
+    env:
+      HARBOR_USERNAME: ${{ inputs.environment == 'staging' && secrets.STG_HARBOR_REGISTRY_RW_USERNAME || secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}
+      HARBOR_PASSWORD: ${{ inputs.environment == 'staging' && secrets.STG_HARBOR_REGISTRY_RW_PASSWORD || secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}
     steps:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.8.2
-
-      - name: Set environment-specific variables
-        id: set-env-vars
-        run: |
-          if [[ "${{ inputs.environment }}" == "staging" ]]; then
-            echo "Using staging Harbor credentials"
-            echo "HARBOR_USERNAME=${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}" >> $GITHUB_ENV
-            echo "HARBOR_PASSWORD=${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}" >> $GITHUB_ENV
-          else
-            echo "Using production Harbor credentials"
-            echo "HARBOR_USERNAME=${{ secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}" >> $GITHUB_ENV
-            echo "HARBOR_PASSWORD=${{ secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}" >> $GITHUB_ENV
-          fi
 
       - name: Sign Harbor images
         env:
@@ -277,26 +237,15 @@ jobs:
           # Setup Docker config
           mkdir -p ~/.docker
           
-          # Use direct variable substitution for better reliability
-          if [[ "${{ inputs.environment }}" == "staging" ]]; then
-            HARBOR_USERNAME="${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}"
-            HARBOR_PASSWORD="${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}"
-          else
-            HARBOR_USERNAME="${{ secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}"
-            HARBOR_PASSWORD="${{ secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}"
-          fi
-          
-          # Encode credentials directly
-          HARBOR_AUTH=$(echo -n "${HARBOR_USERNAME}:${HARBOR_PASSWORD}" | base64 -w0)
-          
-          # Create config.json with proper JSON structure
-          echo '{
+          cat <<EOF > ~/.docker/config.json
+          {
             "auths": {
               "harbor.harbor.svc.cluster.local": {
-                "auth": "'${HARBOR_AUTH}'"
+                "auth": "$(echo -n "$HARBOR_USERNAME:$HARBOR_PASSWORD" | base64 -w0)"
               }
             }
-          }' > ~/.docker/config.json
+          }
+          EOF
           
           # Ensure config.json has correct permissions
           chmod 600 ~/.docker/config.json
