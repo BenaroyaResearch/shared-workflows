@@ -137,10 +137,6 @@ jobs:
           RELEASE_TAG: ${{ needs.determine-tag-and-versions.outputs.release-tag }}
           ENV_TAG: ${{ inputs.environment }}
         run: |
-          # Debug auth credentials without exposing them
-          echo "Using HARBOR_USERNAME length: ${#HARBOR_USERNAME}"
-          echo "Using HARBOR_PASSWORD length: ${#HARBOR_PASSWORD}"
-          
           cat <<EOF > /kaniko/.docker/config.json
           {
             "auths": {
@@ -180,8 +176,7 @@ jobs:
               --insecure-pull \
               --skip-tls-verify \
               --skip-tls-verify-pull \
-              --push-retry 5 \
-              --verbosity debug
+              --push-retry 5
           else
             # For production, add version tag, production tag, and commit SHA tag
             /kaniko/executor --dockerfile="./Dockerfile" \
@@ -199,8 +194,7 @@ jobs:
               --insecure-pull \
               --skip-tls-verify \
               --skip-tls-verify-pull \
-              --push-retry 5 \
-              --verbosity debug
+              --push-retry 5
           fi
 
       - name: Extract digest
