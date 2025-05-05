@@ -26,19 +26,19 @@ on:
         required: true
         type: string
         description: 'Environment to build for (e.g., staging or production)'
-      harbor-username-secret:
-        required: true
-        type: string
-        description: 'Name of the secret containing Harbor username (e.g., STG_HARBOR_REGISTRY_RW_USERNAME)'
-      harbor-password-secret:
-        required: true
-        type: string
-        description: 'Name of the secret containing Harbor password (e.g., STG_HARBOR_REGISTRY_RW_PASSWORD)'
     secrets:
       COSIGN_PRIVATE_KEY:
         required: true
       COSIGN_PASSWORD:
         required: true
+      STG_HARBOR_REGISTRY_RW_USERNAME:
+        required: false
+      STG_HARBOR_REGISTRY_RW_PASSWORD:
+        required: false
+      PROD_HARBOR_REGISTRY_RW_USERNAME:
+        required: false
+      PROD_HARBOR_REGISTRY_RW_PASSWORD:
+        required: false
 
 jobs:
   determine-tag-and-versions:
@@ -48,6 +48,8 @@ jobs:
       node-version: ${{ steps.extract-versions.outputs.node-version }}
       pnpm-version: ${{ steps.extract-versions.outputs.pnpm-version }}
       timestamp: ${{ steps.timestamp.outputs.value }}
+      harbor-username: ${{ steps.set-env-vars.outputs.harbor-username }}
+      harbor-password: ${{ steps.set-env-vars.outputs.harbor-password }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -59,6 +61,19 @@ jobs:
         run: |
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           echo "value=$TIMESTAMP" >> $GITHUB_OUTPUT
+          
+      - name: Set environment-specific variables
+        id: set-env-vars
+        run: |
+          if [[ "${{ inputs.environment }}" == "staging" ]]; then
+            echo "harbor-username=${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}" >> $GITHUB_OUTPUT
+            echo "harbor-password=${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}" >> $GITHUB_OUTPUT
+            echo "Using staging Harbor credentials"
+          else
+            echo "harbor-username=${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}" >> $GITHUB_OUTPUT
+            echo "harbor-password=${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}" >> $GITHUB_OUTPUT
+            echo "Using production Harbor credentials"
+          fi
           
       - name: Get tag
         id: get-tag
@@ -123,8 +138,8 @@ jobs:
       - name: Build and Push Image to Harbor with kaniko
         id: build
         env:
-          HARBOR_USERNAME: ${{ secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}
-          HARBOR_PASSWORD: ${{ secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}
+          HARBOR_USERNAME: ${{ needs.determine-tag-and-versions.outputs.harbor-username }}
+          HARBOR_PASSWORD: ${{ needs.determine-tag-and-versions.outputs.harbor-password }}
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
           IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
           GIT_USERNAME: ${{ github.actor }}
@@ -213,8 +228,8 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
           IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
-          HARBOR_USERNAME: ${{ secrets[inputs.harbor-username-secret] }}
-          HARBOR_PASSWORD: ${{ secrets[inputs.harbor-password-secret] }}
+          HARBOR_USERNAME: ${{ needs.determine-tag-and-versions.outputs.harbor-username }}
+          HARBOR_PASSWORD: ${{ needs.determine-tag-and-versions.outputs.harbor-password }}
           HARBOR_DIGEST: ${{ needs.build-to-harbor.outputs.digest }}
         run: |
           echo "${COSIGN_PRIVATE_KEY}" > /tmp/cosign.key

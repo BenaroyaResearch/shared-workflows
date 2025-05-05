@@ -1,4 +1,4 @@
-name: Production Build Onprem
+name: Staging Build Onprem
 
 on:
   workflow_call:
@@ -18,10 +18,6 @@ on:
         required: false
         type: string
         default: 'deployment'
-      release-tag:
-        required: false
-        type: string
-        description: 'Optional: Manually specify a release tag. If not provided, it will be determined automatically.'
 
 jobs:
   build-onprem:
@@ -31,6 +27,5 @@ jobs:
       package-json-path: ${{ inputs.package-json-path }}
       k8s-namespace: ${{ inputs.k8s-namespace }}
       resource-type: ${{ inputs.resource-type }}
-      release-tag: ${{ inputs.release-tag }}
-      environment: 'production'
+      environment: 'staging'
     secrets: inherit 
