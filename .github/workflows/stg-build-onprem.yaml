@@ -28,8 +28,4 @@ jobs:
       k8s-namespace: ${{ inputs.k8s-namespace }}
       resource-type: ${{ inputs.resource-type }}
       environment: 'staging'
-      harbor-username-secret: 'STG_HARBOR_REGISTRY_RW_USERNAME'
-      harbor-password-secret: 'STG_HARBOR_REGISTRY_RW_PASSWORD'
-    secrets:
-      COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-      COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+    secrets: inherit 
