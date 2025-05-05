@@ -48,17 +48,11 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
           IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
-          STG_HARBOR_USERNAME: ${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}
-          STG_HARBOR_PASSWORD: ${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}
-        #   PROD_HARBOR_USERNAME: ${{ secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}
-        #   PROD_HARBOR_PASSWORD: ${{ secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}
     outputs:
       release-tag: ${{ steps.get-tag.outputs.tag }}
       node-version: ${{ steps.extract-versions.outputs.node-version }}
       pnpm-version: ${{ steps.extract-versions.outputs.pnpm-version }}
       timestamp: ${{ steps.timestamp.outputs.value }}
-      harbor-username: ${{ steps.set-env-vars.outputs.harbor-username }}
-      harbor-password: ${{ steps.set-env-vars.outputs.harbor-password }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -70,19 +64,6 @@ jobs:
         run: |
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           echo "value=$TIMESTAMP" >> $GITHUB_OUTPUT
-          
-      - name: Set environment-specific variables
-        id: set-env-vars
-        run: |
-          if [[ "${{ inputs.environment }}" == "staging" ]]; then
-            echo "harbor-username=$STG_HARBOR_USERNAME" >> $GITHUB_OUTPUT
-            echo "harbor-password=$STG_HARBOR_PASSWORD" >> $GITHUB_OUTPUT
-            echo "Using staging Harbor credentials"
-          else
-            echo "harbor-username=$STG_HARBOR_USERNAME" >> $GITHUB_OUTPUT
-            echo "harbor-password=$STG_HARBOR_PASSWORD" >> $GITHUB_OUTPUT
-            echo "Using production Harbor credentials"
-          fi
           
       - name: Get tag
         id: get-tag
@@ -144,11 +125,22 @@ jobs:
       PNPM_VERSION: ${{ needs.determine-tag-and-versions.outputs.pnpm-version }}
       NODE_ENV: ${{ inputs.environment }}
     steps:
+      - name: Set environment-specific variables
+        id: set-env-vars
+        run: |
+          if [[ "${{ inputs.environment }}" == "staging" ]]; then
+            echo "Using staging Harbor credentials"
+            echo "HARBOR_USERNAME=${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}" >> $GITHUB_ENV
+            echo "HARBOR_PASSWORD=${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}" >> $GITHUB_ENV
+          else
+            echo "Using production Harbor credentials"
+            echo "HARBOR_USERNAME=${{ secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}" >> $GITHUB_ENV
+            echo "HARBOR_PASSWORD=${{ secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}" >> $GITHUB_ENV
+          fi
+
       - name: Build and Push Image to Harbor with kaniko
         id: build
         env:
-          HARBOR_USERNAME: ${{ needs.determine-tag-and-versions.outputs.harbor-username }}
-          HARBOR_PASSWORD: ${{ needs.determine-tag-and-versions.outputs.harbor-password }}
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
           IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
           GIT_USERNAME: ${{ github.actor }}
@@ -231,14 +223,25 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.8.2
 
+      - name: Set environment-specific variables
+        id: set-env-vars
+        run: |
+          if [[ "${{ inputs.environment }}" == "staging" ]]; then
+            echo "Using staging Harbor credentials"
+            echo "HARBOR_USERNAME=${{ secrets.STG_HARBOR_REGISTRY_RW_USERNAME }}" >> $GITHUB_ENV
+            echo "HARBOR_PASSWORD=${{ secrets.STG_HARBOR_REGISTRY_RW_PASSWORD }}" >> $GITHUB_ENV
+          else
+            echo "Using production Harbor credentials"
+            echo "HARBOR_USERNAME=${{ secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}" >> $GITHUB_ENV
+            echo "HARBOR_PASSWORD=${{ secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}" >> $GITHUB_ENV
+          fi
+
       - name: Sign Harbor images
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
           IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
-          HARBOR_USERNAME: ${{ needs.determine-tag-and-versions.outputs.harbor-username }}
-          HARBOR_PASSWORD: ${{ needs.determine-tag-and-versions.outputs.harbor-password }}
           HARBOR_DIGEST: ${{ needs.build-to-harbor.outputs.digest }}
         run: |
           echo "${COSIGN_PRIVATE_KEY}" > /tmp/cosign.key
