@@ -351,6 +351,7 @@ jobs:
                       all_pods_have_new_image=false
                     fi
                     
+                    # Check if pod is truly ready - enhanced to better handle StatefulSets
                     if [[ "$POD_STATUS" != "Running" ]] || [[ "$CONTAINER_READY" != "true" ]]; then
                       echo "Pod $POD_NAME is not ready. Status: $POD_STATUS, Container Ready: $CONTAINER_READY"
                       all_pods_ready=false
@@ -359,15 +360,40 @@ jobs:
                       echo "--- Pod Conditions ---"
                       kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\n"}{end}'
                       
-                      # Get container status
-                      CONTAINER_STATUS=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.status.containerStatuses[0].state}')
-                      echo "Container state: $CONTAINER_STATUS"
+                      # Check for init containers that might still be running
+                      INIT_CONTAINERS=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.spec.initContainers[*].name}' 2>/dev/null)
+                      if [ -n "$INIT_CONTAINERS" ]; then
+                        echo "--- Init Containers Status ---"
+                        kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{range .status.initContainerStatuses[*]}{.name}{"\t"}{.state}{"\n"}{end}'
+                      fi
+                      
+                      # Get container status details
+                      echo "--- Container Status Details ---"
+                      kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{range .status.containerStatuses[*]}{.name}{": "}{.state}{"\n"}{end}'
+                      
+                      # Check if container is in waiting state with specific reason
+                      WAITING_REASON=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null)
+                      if [ -n "$WAITING_REASON" ]; then
+                        echo "Container waiting reason: $WAITING_REASON"
+                        # If container is creating/initializing, we need to wait
+                        if [[ "$WAITING_REASON" == "ContainerCreating" ]] || [[ "$WAITING_REASON" == "PodInitializing" ]]; then
+                          all_pods_ready=false
+                        fi
+                      fi
                       
                       # Get logs if possible
                       echo "--- Container logs ---"
                       kubectl logs $POD -n $KUBE_NAMESPACE --tail=50 || echo "Cannot fetch logs"
                     else
-                      echo "Pod $POD_NAME is running and truly ready."
+                      # Additional check for startup probe or statefulset readiness
+                      # Even if container is "ready", check if all conditions are true
+                      READY_CONDITIONS=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{range .status.conditions[?(@.status=="False")]}{.type}{"\n"}{end}')
+                      if [ -n "$READY_CONDITIONS" ]; then
+                        echo "Pod $POD_NAME has some conditions not ready: $READY_CONDITIONS"
+                        all_pods_ready=false
+                      else
+                        echo "Pod $POD_NAME is running and truly ready."
+                      fi
                     fi
                   done
                   
