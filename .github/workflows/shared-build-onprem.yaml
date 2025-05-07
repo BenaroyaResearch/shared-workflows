@@ -126,7 +126,7 @@ jobs:
     outputs:
       digest: ${{ steps.digest.outputs.digest }}
     env:
-      KANIKO_CACHE_ARGS: '--cache=true --cache-run-layers=true --cache-ttl=4383h --cache-repo=harbor.harbor.svc.cluster.local/bri-cache/docker --registry-map=index.docker.io=harbor.harbor.svc.cluster.local/dockerhub/library --snapshot-mode=redo --use-new-run --compressed-caching=true --single-snapshot'
+      KANIKO_CACHE_ARGS: '--cache=true --cache-run-layers=true --cache-ttl=4383h --cache-repo=harbor.harbor.svc.cluster.local/bri-cache/docker --registry-map=index.docker.io=harbor.harbor.svc.cluster.local/dockerhub/library --snapshot-mode=redo --use-new-run --compressed-caching=false'
       NODE_VERSION: ${{ needs.determine-tag-and-versions.outputs.node-version }}
       PNPM_VERSION: ${{ needs.determine-tag-and-versions.outputs.pnpm-version }}
       NODE_ENV: ${{ inputs.environment }}
