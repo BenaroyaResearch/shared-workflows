@@ -138,7 +138,14 @@ jobs:
           RELEASE_TAG: ${{ needs.determine-tag-and-versions.outputs.release-tag }}
           ENV_TAG: ${{ inputs.environment }}
           GITHUB_REPO_LOWERCASE: ${{ github.repository && github.repository || '' }}
+          FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_TOKEN }}
         run: |
+          # Create credentials file
+          cat <<EOF > /kaniko/repo-credentials.txt
+          FONTAWESOME_TOKEN=$FONTAWESOME_TOKEN
+          GIT_PASSWORD=$GIT_PASSWORD
+          EOF
+          
           cat <<EOF > /kaniko/.docker/config.json
           {
             "auths": {
@@ -208,6 +215,9 @@ jobs:
               --skip-tls-verify-pull \
               --push-retry 5
           fi
+          
+          # Clean up credentials file
+          rm -f /kaniko/repo-credentials.txt
 
       - name: Extract digest
         id: digest
