@@ -113,7 +113,7 @@ jobs:
     needs: [determine-tag-and-versions]
     runs-on: arc-runners-arc-runner-set
     container:
-      image: gcr.io/kaniko-project/executor:v1.23.2
+      image: gcr.io/kaniko-project/executor:latest
     permissions:
       contents: read
       packages: write
