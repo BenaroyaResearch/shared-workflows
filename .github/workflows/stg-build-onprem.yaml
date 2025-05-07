@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: 'deployment'
+      skip-k8s-check:
+        required: false
+        type: boolean
+        default: false
+        description: 'Optional: Skip the Kubernetes deployment verification step.'
 
 jobs:
   build-onprem:
@@ -27,5 +32,6 @@ jobs:
       package-json-path: ${{ inputs.package-json-path }}
       k8s-namespace: ${{ inputs.k8s-namespace }}
       resource-type: ${{ inputs.resource-type }}
+      skip-k8s-check: ${{ inputs.skip-k8s-check }}
       environment: 'staging'
     secrets: inherit 

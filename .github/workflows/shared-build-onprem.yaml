@@ -22,6 +22,11 @@ on:
         required: false
         type: string
         description: 'Optional: Manually specify a release tag. If not provided, it will be determined automatically.'
+      skip-k8s-check:
+        required: false
+        type: boolean
+        default: false
+        description: 'Optional: Skip the Kubernetes deployment verification step.'
       environment:
         required: true
         type: string
@@ -273,6 +278,7 @@ jobs:
   check-k8s-deployment:
     needs: [determine-tag-and-versions, sign-images, build-to-harbor]
     runs-on: arc-runners-arc-runner-set
+    if: ${{ inputs.skip-k8s-check != true }}
     permissions:
       contents: read
       id-token: write
