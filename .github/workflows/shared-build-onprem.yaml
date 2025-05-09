@@ -334,8 +334,24 @@ jobs:
                 echo "$RESOURCE_TYPE is using the new image!"
                 
                 # Check if deployment is ready
-                READY_REPLICAS=$(kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME -o jsonpath='{.status.readyReplicas}')
-                REPLICAS=$(kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME -o jsonpath='{.status.replicas}')
+                if [[ "$RESOURCE_TYPE" == "statefulset" ]]; then
+                  # StatefulSet specific readiness check
+                  READY_REPLICAS=$(kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME -o jsonpath='{.status.readyReplicas}')
+                  REPLICAS=$(kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME -o jsonpath='{.spec.replicas}')
+                  CURRENT_REVISION=$(kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME -o jsonpath='{.status.currentRevision}')
+                  UPDATE_REVISION=$(kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME -o jsonpath='{.status.updateRevision}')
+                  
+                  echo "StatefulSet status: Ready=$READY_REPLICAS, Total=$REPLICAS, CurrentRevision=$CURRENT_REVISION, UpdateRevision=$UPDATE_REVISION"
+                  
+                  # If StatefulSet is updating (revisions don't match) or not all replicas are ready
+                  if [[ "$CURRENT_REVISION" != "$UPDATE_REVISION" ]] || [ -z "$READY_REPLICAS" ] || [ "$READY_REPLICAS" != "$REPLICAS" ]; then
+                    echo "StatefulSet is still updating or not all pods are ready"
+                  fi
+                else
+                  # Regular deployment/daemonset readiness check
+                  READY_REPLICAS=$(kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME -o jsonpath='{.status.readyReplicas}')
+                  REPLICAS=$(kubectl get $RESOURCE_TYPE -n $KUBE_NAMESPACE $APP_NAME -o jsonpath='{.status.replicas}')
+                fi
                 
                 if [ "$READY_REPLICAS" == "$REPLICAS" ] && [ "$READY_REPLICAS" -gt 0 ]; then
                   echo "All pods are reported ready at resource level: $READY_REPLICAS/$REPLICAS"
@@ -369,6 +385,30 @@ jobs:
                       echo "--- Pod Conditions ---"
                       kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{range .status.conditions[*]}{.type}{"\t"}{.status}{"\n"}{end}'
                       
+                      # Check specifically for health probe failures and restarts
+                      RESTART_COUNT=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.status.containerStatuses[0].restartCount}')
+                      LAST_STATE=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.status.containerStatuses[0].lastState}')
+                      
+                      if [ "$RESTART_COUNT" -gt 0 ] || [ -n "$LAST_STATE" ]; then
+                        echo "--- Health Check Failures ---"
+                        echo "Container has restarted $RESTART_COUNT times"
+                        
+                        # Check for termination reason - specifically look for probe failures
+                        TERMINATION_REASON=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}' 2>/dev/null)
+                        if [ "$TERMINATION_REASON" == "Error" ]; then
+                          echo "Container terminated with error, exit code: $(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.status.containerStatuses[0].lastState.terminated.exitCode}')"
+                        fi
+                        
+                        # Check for specific liveness/readiness probe failure events
+                        POD_NAME=$(echo $POD | cut -d'/' -f2)
+                        echo "--- Recent Probe Failure Events ---"
+                        kubectl get events -n $KUBE_NAMESPACE --field-selector involvedObject.name=$POD_NAME,reason=Unhealthy --sort-by='.lastTimestamp' | tail -n 10
+                        
+                        # Get details on the failing probe
+                        echo "--- Probe Details ---"
+                        kubectl describe $POD -n $KUBE_NAMESPACE | grep -A 10 "Liveness\|Readiness"
+                      fi
+                      
                       # Check for init containers that might still be running
                       INIT_CONTAINERS=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.spec.initContainers[*].name}' 2>/dev/null)
                       if [ -n "$INIT_CONTAINERS" ]; then
@@ -380,6 +420,12 @@ jobs:
                       echo "--- Container Status Details ---"
                       kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{range .status.containerStatuses[*]}{.name}{": "}{.state}{"\n"}{end}'
                       
+                      # Show readiness/liveness probe configuration
+                      if [[ "$RESOURCE_TYPE" == "statefulset" ]]; then
+                        echo "--- Probe Configuration ---"
+                        kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{range .spec.containers[*]}{.name}{" Readiness: "}{.readinessProbe}{"\n"}{.name}{" Liveness: "}{.livenessProbe}{"\n"}{end}'
+                      fi
+                      
                       # Check if container is in waiting state with specific reason
                       WAITING_REASON=$(kubectl get $POD -n $KUBE_NAMESPACE -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null)
                       if [ -n "$WAITING_REASON" ]; then
@@ -390,9 +436,28 @@ jobs:
                         fi
                       fi
                       
-                      # Get logs if possible
-                      echo "--- Container logs ---"
-                      kubectl logs $POD -n $KUBE_NAMESPACE --tail=50 || echo "Cannot fetch logs"
+                      # Enhanced log extraction - fetch both current and previous logs to ensure we capture errors
+                      echo "--- Current Container Logs ---"
+                      kubectl logs $POD -n $KUBE_NAMESPACE --tail=50 || echo "Cannot fetch current logs"
+                      
+                      echo "--- Previous Container Logs (if restarted) ---"
+                      kubectl logs $POD -n $KUBE_NAMESPACE --previous --tail=50 || echo "No previous container logs"
+                      
+                      # For pods with health check failures, also capture all events sorted by timestamp
+                      # to see the progression of the failures
+                      if [[ $RESTART_COUNT -gt 0 ]]; then
+                        POD_NAME=$(echo $POD | cut -d'/' -f2)
+                        echo "--- All Pod Events (chronological order) ---"
+                        kubectl get events -n $KUBE_NAMESPACE --field-selector involvedObject.name=$POD_NAME --sort-by='.lastTimestamp'
+                        
+                        # Show the specific container state transitions
+                        echo "--- Container State Transitions ---"
+                        kubectl describe $POD -n $KUBE_NAMESPACE | grep -A 15 "State:" | grep -A 15 "Reason:"
+                        
+                        # Show complete pod description for comprehensive debugging
+                        echo "--- Complete Pod Description ---"
+                        kubectl describe $POD -n $KUBE_NAMESPACE
+                      fi
                     else
                       # Additional check for startup probe or statefulset readiness
                       # Even if container is "ready", check if all conditions are true
