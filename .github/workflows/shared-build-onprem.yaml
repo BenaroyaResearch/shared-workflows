@@ -189,7 +189,7 @@ jobs:
               --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:$ENV_TAG" \
               --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:${{ github.sha }}" \
               --image-name-with-digest-file=/kaniko/digests.txt \
-              --build-arg NODE_ENV=$ENV_TAG \
+              --build-arg NODE_ENV=staging \
               --build-arg NODE_VERSION=${{ env.NODE_VERSION }} \
               --build-arg PNPM_VERSION=${{ env.PNPM_VERSION }} \
               --label "org.opencontainers.image.authors=${{ github.actor }}" \
@@ -206,7 +206,7 @@ jobs:
               --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:$ENV_TAG" \
               --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:${{ github.sha }}" \
               --image-name-with-digest-file=/kaniko/digests.txt \
-              --build-arg NODE_ENV=$ENV_TAG \
+              --build-arg NODE_ENV=production \
               --build-arg NODE_VERSION=${{ env.NODE_VERSION }} \
               --build-arg PNPM_VERSION=${{ env.PNPM_VERSION }} \
               --label "org.opencontainers.image.authors=${{ github.actor }}" \
