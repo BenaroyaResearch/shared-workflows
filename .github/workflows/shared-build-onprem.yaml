@@ -130,7 +130,7 @@ jobs:
       KANIKO_COMMON_ARGS: '--insecure --insecure-pull --skip-tls-verify --skip-tls-verify-pull --push-retry 5 --verbosity=info'
       NODE_VERSION: ${{ needs.determine-tag-and-versions.outputs.node-version }}
       PNPM_VERSION: ${{ needs.determine-tag-and-versions.outputs.pnpm-version }}
-      NODE_ENV: ${{ inputs.environment }}
+      ENV_TAG: ${{ inputs.environment }}
       HARBOR_USERNAME: ${{ inputs.environment == 'staging' && secrets.STG_HARBOR_REGISTRY_RW_USERNAME || secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}
       HARBOR_PASSWORD: ${{ inputs.environment == 'staging' && secrets.STG_HARBOR_REGISTRY_RW_PASSWORD || secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}
     steps:
