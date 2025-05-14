@@ -34,4 +34,5 @@ jobs:
       resource-type: ${{ inputs.resource-type }}
       skip-k8s-check: ${{ inputs.skip-k8s-check }}
       environment: 'staging'
+      runner: 'stg-onprem'
     secrets: inherit 

@@ -31,6 +31,10 @@ on:
         required: true
         type: string
         description: 'Environment to build for (e.g., staging or production)'
+      runner:
+        required: true
+        type: string
+        description: 'The runner to use for the workflow (e.g., stg-onprem or onprem)'
     secrets:
       COSIGN_PRIVATE_KEY:
         required: true
@@ -47,7 +51,7 @@ on:
 
 jobs:
   determine-tag-and-versions:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
@@ -116,7 +120,7 @@ jobs:
 
   build-to-harbor:
     needs: [determine-tag-and-versions]
-    runs-on: arc-runners-arc-runner-set
+    runs-on: ${{ inputs.runner }}
     container:
       image: gcr.io/kaniko-project/executor:v1.23.2-debug
     permissions:
@@ -226,7 +230,7 @@ jobs:
 
   sign-images:
     needs: [determine-tag-and-versions, build-to-harbor]
-    runs-on: arc-runners-arc-runner-set
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
       id-token: write
@@ -270,7 +274,7 @@ jobs:
 
   check-k8s-deployment:
     needs: [determine-tag-and-versions, sign-images, build-to-harbor]
-    runs-on: arc-runners-arc-runner-set
+    runs-on: ${{ inputs.runner }}
     if: ${{ inputs.skip-k8s-check != true }}
     permissions:
       contents: read

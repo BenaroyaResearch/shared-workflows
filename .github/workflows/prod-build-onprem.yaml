@@ -39,4 +39,5 @@ jobs:
       release-tag: ${{ inputs.release-tag }}
       skip-k8s-check: ${{ inputs.skip-k8s-check }}
       environment: 'production'
+      runner: 'onprem'
     secrets: inherit 
