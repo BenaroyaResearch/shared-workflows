@@ -56,12 +56,12 @@ jobs:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
-          IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
     outputs:
       release-tag: ${{ steps.get-tag.outputs.tag }}
       node-version: ${{ steps.extract-versions.outputs.node-version }}
       pnpm-version: ${{ steps.extract-versions.outputs.pnpm-version }}
       timestamp: ${{ steps.timestamp.outputs.value }}
+      image-name-lowercase: ${{ steps.lowercase-image.outputs.image-name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -73,6 +73,15 @@ jobs:
         run: |
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           echo "value=$TIMESTAMP" >> $GITHUB_OUTPUT
+          
+      - name: Create lowercase image name
+        id: lowercase-image
+        run: |
+          # Convert repository name to lowercase for Docker registry compatibility
+          REPO_NAME_LOWERCASE=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME_LOWERCASE="bri/$REPO_NAME_LOWERCASE"
+          echo "image-name=$IMAGE_NAME_LOWERCASE" >> $GITHUB_OUTPUT
+          echo "Using lowercase image name: $IMAGE_NAME_LOWERCASE"
           
       - name: Get tag
         id: get-tag
@@ -137,12 +146,12 @@ jobs:
       ENV_TAG: ${{ inputs.environment }}
       HARBOR_USERNAME: ${{ inputs.environment == 'staging' && secrets.STG_HARBOR_REGISTRY_RW_USERNAME || secrets.PROD_HARBOR_REGISTRY_RW_USERNAME }}
       HARBOR_PASSWORD: ${{ inputs.environment == 'staging' && secrets.STG_HARBOR_REGISTRY_RW_PASSWORD || secrets.PROD_HARBOR_REGISTRY_RW_PASSWORD }}
+      IMAGE_NAME_LOWERCASE: ${{ needs.determine-tag-and-versions.outputs.image-name-lowercase }}
     steps:
       - name: Build and Push Image to Harbor with kaniko
         id: build
         env:
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
-          IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
           GIT_USERNAME: ${{ github.actor }}
           GIT_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.determine-tag-and-versions.outputs.release-tag }}
@@ -180,15 +189,16 @@ jobs:
           echo "Using Node.js version: $NODE_VERSION"
           echo "Using pnpm version: $PNPM_VERSION"
           echo "Using lowercase repository name: $GITHUB_REPO_LOWERCASE"
+          echo "Using lowercase Harbor image name: $IMAGE_NAME_LOWERCASE"
 
           # Build image with appropriate tags based on environment
           if [[ "$ENV_TAG" == "staging" ]]; then
             # For staging, add timestamp-based tag, staging tag, and commit SHA tag
             /kaniko/executor --dockerfile="./Dockerfile" \
               --context="${{ github.repositoryUrl }}#${{ github.ref }}#${{ github.sha }}"  \
-              --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG-$RELEASE_TAG" \
-              --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG" \
-              --destination="$HARBOR_REGISTRY/$IMAGE_NAME:${{ github.sha }}" \
+              --destination="$HARBOR_REGISTRY/$IMAGE_NAME_LOWERCASE:$ENV_TAG-$RELEASE_TAG" \
+              --destination="$HARBOR_REGISTRY/$IMAGE_NAME_LOWERCASE:$ENV_TAG" \
+              --destination="$HARBOR_REGISTRY/$IMAGE_NAME_LOWERCASE:${{ github.sha }}" \
               --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:$ENV_TAG-$RELEASE_TAG" \
               --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:$ENV_TAG" \
               --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:${{ github.sha }}" \
@@ -203,9 +213,9 @@ jobs:
             # For production, add version tag, production tag, and commit SHA tag
             /kaniko/executor --dockerfile="./Dockerfile" \
               --context="${{ github.repositoryUrl }}#${{ github.ref }}#${{ github.sha }}"  \
-              --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$RELEASE_TAG" \
-              --destination="$HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG" \
-              --destination="$HARBOR_REGISTRY/$IMAGE_NAME:${{ github.sha }}" \
+              --destination="$HARBOR_REGISTRY/$IMAGE_NAME_LOWERCASE:$RELEASE_TAG" \
+              --destination="$HARBOR_REGISTRY/$IMAGE_NAME_LOWERCASE:$ENV_TAG" \
+              --destination="$HARBOR_REGISTRY/$IMAGE_NAME_LOWERCASE:${{ github.sha }}" \
               --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:$RELEASE_TAG" \
               --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:$ENV_TAG" \
               --destination="ghcr.io/$GITHUB_REPO_LOWERCASE:${{ github.sha }}" \
@@ -247,7 +257,7 @@ jobs:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
-          IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
+          IMAGE_NAME_LOWERCASE: ${{ needs.determine-tag-and-versions.outputs.image-name-lowercase }}
           HARBOR_DIGEST: ${{ needs.build-to-harbor.outputs.digest }}
         run: |
           echo "${COSIGN_PRIVATE_KEY}" > /tmp/cosign.key
@@ -269,7 +279,7 @@ jobs:
           chmod 600 ~/.docker/config.json
 
           if [ -n "$HARBOR_DIGEST" ]; then
-            cosign sign --key /tmp/cosign.key --yes --allow-insecure-registry=true "$HARBOR_REGISTRY/$IMAGE_NAME@$HARBOR_DIGEST"
+            cosign sign --key /tmp/cosign.key --yes --allow-insecure-registry=true "$HARBOR_REGISTRY/$IMAGE_NAME_LOWERCASE@$HARBOR_DIGEST"
           fi
 
   check-k8s-deployment:
@@ -294,7 +304,7 @@ jobs:
           ENV_TAG: ${{ inputs.environment }}
           IMAGE_TAG: ${{ github.sha }}
           HARBOR_REGISTRY: 'harbor.harbor.svc.cluster.local'
-          IMAGE_NAME: 'bri/${{ github.event.repository.name }}'
+          IMAGE_NAME_LOWERCASE: ${{ needs.determine-tag-and-versions.outputs.image-name-lowercase }}
           HARBOR_DIGEST: ${{ needs.build-to-harbor.outputs.digest }}
           MAX_RETRIES: 30
           RETRY_INTERVAL: 10
@@ -325,13 +335,13 @@ jobs:
               
               echo "Current image: $CURRENT_IMAGE"
               if [[ "$ENV_TAG" == "staging" ]]; then
-                echo "Expected image by tag: $HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG-$RELEASE_TAG"
-                echo "Expected image by env: $HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG"
+                echo "Expected image by tag: $HARBOR_REGISTRY/$IMAGE_NAME_LOWERCASE:$ENV_TAG-$RELEASE_TAG"
+                echo "Expected image by env: $HARBOR_REGISTRY/$IMAGE_NAME_LOWERCASE:$ENV_TAG"
               else
-                echo "Expected image by tag: $HARBOR_REGISTRY/$IMAGE_NAME:$RELEASE_TAG"
-                echo "Expected image by env: $HARBOR_REGISTRY/$IMAGE_NAME:$ENV_TAG"
+                echo "Expected image by tag: $HARBOR_REGISTRY/$IMAGE_NAME_LOWERCASE:$RELEASE_TAG"
+                echo "Expected image by env: $HARBOR_REGISTRY/$IMAGE_NAME_LOWERCASE:$ENV_TAG"
               fi
-              echo "Expected image by hash: $HARBOR_REGISTRY/$IMAGE_NAME:$IMAGE_TAG or with digest $HARBOR_DIGEST"
+              echo "Expected image by hash: $HARBOR_REGISTRY/$IMAGE_NAME_LOWERCASE:$IMAGE_TAG or with digest $HARBOR_DIGEST"
               
               # Check if deployment is using our image (either by environment, release tag, commit hash, or digest)
               if [[ "$CURRENT_IMAGE" == *"$ENV_TAG"* ]] || [[ "$CURRENT_IMAGE" == *"$RELEASE_TAG"* ]] || [[ "$CURRENT_IMAGE" == *"$IMAGE_TAG"* ]] || [[ -n "$HARBOR_DIGEST" && "$CURRENT_IMAGE" == *"$HARBOR_DIGEST"* ]]; then
