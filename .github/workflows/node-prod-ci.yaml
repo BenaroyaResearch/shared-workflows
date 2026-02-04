@@ -6,7 +6,7 @@ on:
 
 jobs:
   production:
-    uses: ./.github/workflows/build-and-push.yaml
+    uses: BenaroyaResearch/shared-workflows/.github/workflows/build-and-push.yaml@main
     with:
       environment: production
       docker-tags: |

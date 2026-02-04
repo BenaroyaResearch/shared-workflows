@@ -9,7 +9,7 @@ on:
 
 jobs:
   staging:
-    uses: ./.github/workflows/build-and-push.yaml
+    uses: BenaroyaResearch/shared-workflows/.github/workflows/build-and-push.yaml@main
     with:
       environment: staging
       docker-tags: |
