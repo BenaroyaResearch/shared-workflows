@@ -7,10 +7,6 @@ on:
         description: 'Environment to build for (staging or production)'
         required: true
         type: string
-      docker-tags:
-        description: 'Docker tags configuration for metadata-action'
-        required: true
-        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -58,7 +54,11 @@ jobs:
         uses: docker/metadata-action@v5.5.1
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: ${{ inputs.docker-tags }}
+          tags: |
+            ${{ inputs.environment == 'production' && 'type=ref,event=branch' || '' }}
+            ${{ inputs.environment == 'production' && 'type=semver,pattern={{version}}' || '' }}
+            ${{ inputs.environment == 'staging' && 'type=raw,value=staging-{{sha}}-{{date ''YYYYMMDDHHmmss'' tz=''America/Los_Angeles''}}' || '' }}
+            ${{ inputs.environment == 'staging' && 'type=raw,value=staging' || '' }}
 
       - name: Build and push final image
         uses: docker/build-push-action@v6.10.0
