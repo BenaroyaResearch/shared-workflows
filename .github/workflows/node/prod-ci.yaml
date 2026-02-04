@@ -1,0 +1,15 @@
+name: prod-ci
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  production:
+    uses: ./.github/workflows/build-and-push.yaml
+    with:
+      environment: production
+      docker-tags: |
+        type=ref,event=branch
+        type=semver,pattern={{version}}
+    secrets: inherit
