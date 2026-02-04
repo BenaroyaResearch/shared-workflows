@@ -1,8 +1,7 @@
 name: prod-ci
 
 on:
-  release:
-    types: [published]
+  workflow_call:
 
 jobs:
   production:
