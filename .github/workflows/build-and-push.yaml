@@ -36,6 +36,7 @@ jobs:
         with:
           repository: BenaroyaResearch/shared-workflows
           path: shared-workflows
+          token: ${{ secrets.GITHUB_TOKEN }}
         
       - name: Extract versions from package.json
         run: |
