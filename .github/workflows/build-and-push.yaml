@@ -7,6 +7,11 @@ on:
         description: 'Environment to build for (staging or production)'
         required: true
         type: string
+      use-survey-ui:
+        description: 'Whether to initialize survey-ui submodules'
+        required: false
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -38,6 +43,16 @@ jobs:
         run: |
           chmod +x shared-workflows/.github/extract-versions.sh
           shared-workflows/.github/extract-versions.sh
+
+      - name: Setup SSH for submodules
+        if: ${{ inputs.use-survey-ui }}
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SURVEY_UI_DEPLOY_KEY }}
+
+      - name: Checkout submodules
+        if: ${{ inputs.use-survey-ui }}
+        run: git submodule update --init --recursive
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3.0.0
